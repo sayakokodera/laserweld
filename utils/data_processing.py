@@ -1,12 +1,71 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Data Processing of the laser measurements for a SINGLE channel
 """
 
 import numpy as np
 import scipy.signal as scsig
-from scipy.ndimage import median_filter
+
+#=======================================================
+# Automatic identification of pulse-like WST components
+#=======================================================
+class ACFAnalysis():
+    def __init__(self):
+        pass
+    
+    def comp_acf(self, _signal, _shift_start, _shift_end):
+        # (0) Unit-energy normalization
+        signal = _signal / np.linalg.norm(_signal, ord=2)
+        # (1) ACF
+        acf = np.correlate(signal, signal, mode='full')
+        # Keep only the lag >= 0 (Cf: np.correlate doc)
+        mid = len(acf) // 2
+        acf = acf[mid:]
+        # Take only the range of interest
+        acf_roi = acf[_shift_start:_shift_end]
+        # Normalize s.t. the max == 1
+        acf_roi /= np.max(acf_roi)
+        return acf_roi
+    
+    def ls_line_fit(self, x, y):
+        # y = ax + b --> y = X \cdot v, with the coefficients v = [a, b]
+        # (1) Zero-mean
+        y_cent = y - np.mean(y)
+        # (2) Array formatting
+        X = np.stack((x, np.ones(x.shape[0]))).T
+        # (3) Estimate the coefficients v via LS (pseudo-inverse): v_hat = X_pinv \cdot y
+        [a_hat, b_hat] = np.dot(np.linalg.pinv(X), y_cent)
+        return a_hat, b_hat+np.mean(y)
+    
+    
+    def error_line_fit(self, _signal):
+        # line fit
+        a, b = self.ls_line_fit(np.arange(len(_signal)), _signal)
+        # Model error
+        error = (a*np.arange(len(_signal)) + b) - _signal
+        return error
+
+    def crest_factor(self, _signal):
+        return np.max(np.abs(_signal))/np.linalg.norm(_signal, ord=2)
+
+    def comp_criterion(self, _results, _shift_start, _shift_end):
+        """
+        Comment: 
+            this criterion is selected empirically; I analyzed the ACFs and this particular quantity seems
+            to easily threshold 
+                * ACFs of the noise components do not have any peaks after time_shift = 0
+                    => Their ACFs decay with the time shift -> easily to approximate with a descnding line
+                * On the other hand, ACFs of the pulse-like components have multiple peaks even time_shift >> 0
+                    => Their ACFs are very different from a line 
+            Hence, I decided to used this quantity as the criterion to identify the pulse-like components
+        """
+        # (1) ACF
+        acf = self.comp_acf(_results, _shift_start, _shift_end)
+        # (2) Model error: ACF vs line fit
+        error = self.error_line_fit(acf)
+        # Crierion := inf_error / cf_acf 
+        inf_error = np.abs(error).max()
+        cf_acf = self.crest_factor(acf)
+        return inf_error/cf_acf
 
 
 def process_laser_data(sig, f_range, dt, w_duration):
@@ -122,17 +181,5 @@ class ProcessingUtil():
         # Moving average = element wise multiplication with arr
         return sig_conv* arr
 
-    # ----------------------------
-    # Outlier detection using MAD
-    # ----------------------------
-    @staticmethod
-    def is_outlier(sig, l_window, rel_threshold):
-        # Compute median
-        median = median_filter(sig, l_window)
-        # Compute MAD
-        mad = median_filter(np.abs(sig - median), size = l_window)
-        # True-False array: True, if the deviation to the median is larger than the scaled MAD
-        tf = np.abs(sig - median) > rel_threshold* mad
-        return (tf).astype(int), median, mad
     
     

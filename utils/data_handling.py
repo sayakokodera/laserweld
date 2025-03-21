@@ -8,7 +8,6 @@ class LaserDataInteractorESRF():
     def __init__(self):
         pass
     
-    
     @property
     def path_rel(self):
         return self._path_rel
